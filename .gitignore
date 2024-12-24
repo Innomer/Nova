@@ -174,4 +174,5 @@ cython_debug/
 *.gz
 *.zip
 *.tar
+*.npy
 ML/dataset/

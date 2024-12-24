@@ -13,7 +13,10 @@ from queue import Queue
 import time
 from matplotlib import pyplot as plt
 import sounddevice as sd 
-
+import soundfile as sf
+from voice_auth import feature_extraction, verify_speaker
+import noisereduce as nr
+import os
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -23,6 +26,9 @@ class Particle:
 
         self.x_offset = np.random.uniform(0, 0.5)
         self.y_offset = np.random.uniform(0, 0.5)
+        
+        self.color=(0.0, 0.8, 1.0)
+        self.trail_color=(0.5, 0.8, 1.0)
 
     def update(self, loudness):
         # Update radius and speed based on loudness
@@ -45,23 +51,26 @@ class Particle:
 
         # Add the current position to history
         self.history.append((x, y))
+    
+    def update_color(self, p_color, t_color):
+        self.color=p_color
+        self.trail_color=t_color
 
     def draw(self):
         # Draw trails
         glBegin(GL_LINE_STRIP)
         for i, (x, y) in enumerate(self.history):
             alpha = (i + 1) / len(self.history)  # Gradual fade
-            glColor4f(0.5, 0.8, 1.0, alpha)  # Particle trail color
+            glColor4f(self.trail_color[0], self.trail_color[1], self.trail_color[2], alpha) # Trail color
             glVertex2f(x, y)
         glEnd()
 
         # Draw the particle
-        glColor3f(0.0, 0.8, 1.0)
+        glColor3f(self.color[0], self.color[1], self.color[2])
         glBegin(GL_POINTS)
         x, y = self.history[-1]
         glVertex2f(x, y)
         glEnd()
-
 
 class AudioThread(QThread):
     loudness_signal = pyqtSignal(float)  # Signal to pass loudness to the main thread
@@ -102,9 +111,9 @@ class AudioThread(QThread):
         stream.close()
         p.terminate()
 
-
 class VoiceRecognitionThread(QThread):
     speech_text_signal = pyqtSignal(str)  # Signal to pass text to the main thread
+    pass_audio_signal = pyqtSignal(np.ndarray)  # Signal to pass audio data to GeneralFunctionalityThread
 
     def __init__(self):
         super().__init__()
@@ -119,12 +128,17 @@ class VoiceRecognitionThread(QThread):
         self.sample_counter = 0  
         self.start_sample_index = None
         self.end_sample_index = None
+        
+        self.intent = None
+        self.general_functionality_thread = None
+        self.registered_once = True
+        self.logged_in=False
 
         # Set up a live plot for dequeued audio data
-        self.fig, self.ax = plt.subplots()
-        self.plot_line, = self.ax.plot([], [], lw=1)
-        plt.ion()
-        plt.show()
+        # self.fig, self.ax = plt.subplots()
+        # self.plot_line, = self.ax.plot([], [], lw=1)
+        # plt.ion()
+        # plt.show()
         
     def update_loudness(self, loudness):
         self.loudness = loudness
@@ -165,8 +179,8 @@ class VoiceRecognitionThread(QThread):
                         self.audio_buffer.clear()
 
                         # Plot, play, and recognize speech from the segment
-                        self.plot_audio_buffer(segment)
-                        self.play_audio(segment)
+                        # self.plot_audio_buffer(segment)
+                        # self.play_audio(segment)
                         self.recognize_speech(segment)
 
             except Exception as e:
@@ -207,6 +221,10 @@ class VoiceRecognitionThread(QThread):
         sd.play(audio_array, samplerate=44100)
         sd.wait()  # Wait until playback is complete
 
+    def set_general_functionality_thread(self, thread):
+        """Set reference to GeneralFunctionalityThread to call methods from here."""
+        self.general_functionality_thread = thread
+        
     def recognize_speech(self, audio_array):
         """Recognize speech from the extracted audio."""
         try:
@@ -217,12 +235,117 @@ class VoiceRecognitionThread(QThread):
             print(f"Recognized Speech: {text}")
 
             self.speech_text_signal.emit(text)
+            
+            if "register" in text.lower() and not self.registered_once:
+                self.intent = "register"
+                print("Intent: Register")
+                self.pass_audio_signal.emit(audio_array)
+                self.registered_once = True
+            elif "register" in text.lower() and self.registered_once:
+                if self.logged_in:
+                    self.intent = "register"
+                    print("Intent: Register")
+                    self.pass_audio_signal.emit(audio_array)
+                else:
+                    print("Restricted Access") # Remind user to login
+            elif "login" in text.lower():
+                self.intent = "login"
+                print("Intent: Login")
+                self.pass_audio_signal.emit(audio_array)
+            elif "logout" in text.lower():
+                self.intent = "logout"
+                print("Intent: Logout")
+                self.logged_in=False
+                self.pass_audio_signal.emit(audio_array)
+            else:
+                if self.logged_in:
+                    print("Intent: Other")
+                    pass # Allow access to other stuff
+                else:
+                    print("Restricted Access")
+                    pass # Remind user to login
 
         except sr.UnknownValueError:
             print("Google Speech Recognition could not understand audio")
         except sr.RequestError as e:
             print(f"Could not request results from Google Speech Recognition service; {e}")
 
+class GeneralFunctionalityThread(QThread):
+    verification_result_signal = pyqtSignal(int)  # Signal to pass verification result to the main thread
+    
+    def __init__(self):
+        super().__init__()
+        self.is_recording = False
+        self.voice_thread=None
+        os.makedirs("recordings", exist_ok=True)
+        os.makedirs("public", exist_ok=True) # Add the model in the public folder
+
+    def run(self):
+        """Thread entry point, runs continuously."""
+        pass  # Can be expanded to include other functionalities as needed
+
+    def process_audio_clip(self, audio_data):
+        if self.voice_thread:
+            if self.voice_thread.intent == "register":
+                self.save_audio_clip(audio_data)
+            elif self.voice_thread.intent == "login":
+                self.compare_audio_clip(audio_data)
+            elif self.voice_thread.intent == "logout":
+                self.voice_thread.logged_in=False
+                self.verification_result_signal.emit(1)
+                print("Logged out successfully!")
+    
+    def save_audio_clip(self,audio_data):
+        print("Saving received voice clip...")
+        audio_array = np.array(audio_data)
+
+        # Normalize and save audio as WAV file
+        audio_array = np.int16(audio_array / np.max(np.abs(audio_array)) * 32767)
+        file_name = f"recordings/voice_clip_{int(time.time())}.wav"       
+        # Create a thread for feature extraction
+        def extract_features():
+            print("Reducing noise and saving audio clip...")
+            audio_array_reduced = nr.reduce_noise(y=audio_array, sr=44100)
+            sf.write(file_name, audio_array_reduced, samplerate=44100)        
+            print(f"Voice clip saved as: {file_name}")
+            print("Extracting features...")
+            voiced_features = feature_extraction(file_name, fs=44100)
+            with open("recordings/user_voice_features.npy", "wb") as f:
+                np.save(f, voiced_features)
+            os.remove(file_name)
+            print("Voice features saved as: user_voice_feature.npy")
+
+        feature_thread = threading.Thread(target=extract_features)
+        feature_thread.start()
+        # feature_thread.join()
+        
+    def compare_audio_clip(self,audio_data):
+        print("Comparing received voice clip...")
+        audio_array = np.array(audio_data)
+
+        # Normalize and save audio as WAV file
+        audio_array = np.int16(audio_array / np.max(np.abs(audio_array)) * 32767)
+        file_name = f"recordings/voice_clip_{int(time.time())}.wav"    
+           
+        # Create a thread for feature extraction
+        def extract_features():
+            print("Reducing noise and saving audio clip...")
+            audio_array_reduced = nr.reduce_noise(y=audio_array, sr=44100)
+            sf.write(file_name, audio_array_reduced, samplerate=44100)        
+            print(f"Voice clip saved as: {file_name}")
+            print("Extracting features...")
+            voiced_features = feature_extraction(file_name, fs=44100)
+            os.remove(file_name)
+            saved_features_file = os.listdir("recordings")[0]
+            model_file = os.listdir("public")[0]
+            verification_result = verify_speaker(voiced_features, f"recordings/{saved_features_file}", f"public/{model_file}")
+            verification_result = int(verification_result)
+            self.verification_result_signal.emit(verification_result)
+            self.voice_thread.logged_in=True
+
+        feature_thread = threading.Thread(target=extract_features)
+        feature_thread.start()
+        # feature_thread.join()
 
 class OpenGLWidget(QOpenGLWidget):
     def __init__(self):
@@ -230,6 +353,7 @@ class OpenGLWidget(QOpenGLWidget):
         self.particles = [Particle() for _ in range(100)]  # Create 100 particles
         self.loudness = 0.0
         self.speech_text = ""
+        self.background_color = (0.2, 0.1, 0.1, 1.0)
 
         # Set up a timer for animation updates
         self.timer = QTimer(self)
@@ -244,12 +368,15 @@ class OpenGLWidget(QOpenGLWidget):
     def initializeGL(self):
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glClearColor(0.1, 0.1, 0.2, 1.0)
+        glClearColor(self.background_color[0], self.background_color[1], self.background_color[2], self.background_color[3])
+        for particle in self.particles:
+            particle.update_color((1.0, 0.0, 0.0), (1.0, 0.5, 0.5))
 
     def resizeGL(self, w, h):
         glViewport(0, 0, w, h)
 
     def paintGL(self):
+        glClearColor(self.background_color[0], self.background_color[1], self.background_color[2], self.background_color[3])
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         # Draw particles
@@ -265,7 +392,16 @@ class OpenGLWidget(QOpenGLWidget):
     def update_speech_text(self, text):
         self.speech_text = text
         self.update()
-
+    
+    def set_color_based_on_verification_result(self, result):
+        if result == 0:
+            for particle in self.particles:
+                particle.update_color((0.0, 0.8, 1.0), (0.5, 0.8, 1.0))
+            self.background_color = (0.1, 0.1, 0.2, 1.0)
+        else:
+            for particle in self.particles:
+                particle.update_color((1.0, 0.0, 0.0), (1.0, 0.5, 0.5))
+            self.background_color=(0.2, 0.1, 0.1, 1.0)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -277,6 +413,10 @@ class MainWindow(QMainWindow):
         self.opengl_widget = OpenGLWidget()
         self.setCentralWidget(self.opengl_widget)
 
+        self.general_functionality_thread = GeneralFunctionalityThread()
+        self.general_functionality_thread.start()
+        self.general_functionality_thread.verification_result_signal.connect(self.opengl_widget.set_color_based_on_verification_result)
+        
         # Start real-time loudness calculation in a separate thread
         self.audio_thread = AudioThread()
         self.audio_thread.loudness_signal.connect(self.opengl_widget.update_loudness)
@@ -287,8 +427,11 @@ class MainWindow(QMainWindow):
         self.voice_thread.speech_text_signal.connect(self.opengl_widget.update_speech_text)
         self.audio_thread.audio_signal.connect(self.voice_thread.queue.put)
         self.audio_thread.loudness_signal.connect(self.voice_thread.update_loudness)
+        self.voice_thread.set_general_functionality_thread(self.general_functionality_thread)
+        self.voice_thread.pass_audio_signal.connect(self.general_functionality_thread.process_audio_clip)
+        self.general_functionality_thread.voice_thread=self.voice_thread
         self.voice_thread.start()
-
+        
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
