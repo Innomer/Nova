@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import soundfile as sf
 import librosa
@@ -36,7 +35,7 @@ def feature_extraction(audio_file_name, fs=16000, max_frames=250, zcr_threshold=
     audio = audio.astype(np.float32)
     
     audio=audio[fs*2:]
-    audio=nr.reduce_noise(audio, sr=fs)
+    # audio=nr.reduce_noise(audio, sr=fs)
     voiced_features = extract_features(audio, fs, zcr_threshold, energy_threshold)
     
     voiced_features = voiced_features.T  # Shape: (n_frames, n_features)
