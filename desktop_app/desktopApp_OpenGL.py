@@ -131,7 +131,7 @@ class VoiceRecognitionThread(QThread):
         
         self.intent = None
         self.general_functionality_thread = None
-        self.registered_once = True
+        self.registered_once = False
         self.logged_in=False
 
         # Set up a live plot for dequeued audio data
