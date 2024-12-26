@@ -17,6 +17,7 @@ import soundfile as sf
 from voice_auth import feature_extraction, verify_speaker
 import noisereduce as nr
 import os
+import librosa
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -92,16 +93,12 @@ class AudioThread(QThread):
 
         while True:
             try:
-                # Read audio data from the stream
                 data = stream.read(1024, exception_on_overflow=False)
 
-                # Convert audio data to numpy array
                 audio_data = np.frombuffer(data, dtype=np.int16)
 
-                # Calculate RMS loudness
-                rms = np.abs(audio_data).mean()
-                # print(rms)
-                self.loudness_signal.emit(rms)
+                loudness = np.abs(audio_data).mean()
+                self.loudness_signal.emit(loudness)
                 self.audio_signal.emit(audio_data)
 
             except Exception as e:
@@ -147,7 +144,6 @@ class VoiceRecognitionThread(QThread):
         """Process incoming audio data for speech recognition."""
         while True:
             try:
-                # Wait for audio data from the AudioThread
                 audio_data = self.queue.get()
 
                 # Continuously add audio data to the circular buffer
@@ -173,7 +169,6 @@ class VoiceRecognitionThread(QThread):
                         margin_samples = int(self.margin_seconds * 44100)
                         segment = self.get_relevant_audio(margin_samples)
                         
-                        # Reset
                         self.start_sample_index = None
                         self.end_sample_index = None
                         self.audio_buffer.clear()
@@ -204,7 +199,7 @@ class VoiceRecognitionThread(QThread):
 
     def plot_audio_buffer(self, audio_array):
         """Plot the audio data in the buffer."""
-        self.ax.clear()  # Clear previous plot
+        self.ax.clear()
         self.ax.plot(audio_array, lw=1, color='blue')
         self.ax.set_title("Audio Segment Data")
         self.ax.set_xlabel("Samples")
@@ -278,11 +273,11 @@ class GeneralFunctionalityThread(QThread):
         self.is_recording = False
         self.voice_thread=None
         os.makedirs("recordings", exist_ok=True)
-        os.makedirs("public", exist_ok=True) # Add the model in the public folder
+        os.makedirs("public", exist_ok=True)
 
     def run(self):
         """Thread entry point, runs continuously."""
-        pass  # Can be expanded to include other functionalities as needed
+        pass
 
     def process_audio_clip(self, audio_data):
         if self.voice_thread:
@@ -307,9 +302,12 @@ class GeneralFunctionalityThread(QThread):
             print("Reducing noise and saving audio clip...")
             audio_array_reduced = nr.reduce_noise(y=audio_array, sr=44100)
             sf.write(file_name, audio_array_reduced, samplerate=44100)        
+            audio, fs = librosa.load(file_name, sr=44100)
+            resampled_audio = librosa.resample(audio, orig_sr=fs, target_sr=16000)
+            sf.write(file_name, resampled_audio, 16000, subtype='PCM_16')
             print(f"Voice clip saved as: {file_name}")
             print("Extracting features...")
-            voiced_features = feature_extraction(file_name, fs=44100)
+            voiced_features = feature_extraction(file_name)
             with open("recordings/user_voice_features.npy", "wb") as f:
                 np.save(f, voiced_features)
             os.remove(file_name)
@@ -317,7 +315,6 @@ class GeneralFunctionalityThread(QThread):
 
         feature_thread = threading.Thread(target=extract_features)
         feature_thread.start()
-        # feature_thread.join()
         
     def compare_audio_clip(self,audio_data):
         print("Comparing received voice clip...")
@@ -331,21 +328,24 @@ class GeneralFunctionalityThread(QThread):
         def extract_features():
             print("Reducing noise and saving audio clip...")
             audio_array_reduced = nr.reduce_noise(y=audio_array, sr=44100)
-            sf.write(file_name, audio_array_reduced, samplerate=44100)        
+            sf.write(file_name, audio_array_reduced, samplerate=44100)     
+            audio, fs = librosa.load(file_name, sr=44100)
+            resampled_audio = librosa.resample(audio, orig_sr=fs, target_sr=16000)
+            sf.write(file_name, resampled_audio, 16000, subtype='PCM_16')   
             print(f"Voice clip saved as: {file_name}")
             print("Extracting features...")
-            voiced_features = feature_extraction(file_name, fs=44100)
+            voiced_features = feature_extraction(file_name)
             os.remove(file_name)
             saved_features_file = os.listdir("recordings")[0]
             model_file = os.listdir("public")[0]
             verification_result = verify_speaker(voiced_features, f"recordings/{saved_features_file}", f"public/{model_file}")
             verification_result = int(verification_result)
             self.verification_result_signal.emit(verification_result)
-            self.voice_thread.logged_in=True
+            print(f"Verification result: {verification_result}")
+            self.voice_thread.logged_in=True if verification_result==0 else False
 
         feature_thread = threading.Thread(target=extract_features)
         feature_thread.start()
-        # feature_thread.join()
 
 class OpenGLWidget(QOpenGLWidget):
     def __init__(self):

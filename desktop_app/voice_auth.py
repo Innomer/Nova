@@ -30,12 +30,11 @@ def extract_features(audio, fs=16000, zcr_threshold=None, energy_threshold=None)
 
     return voiced_features
 
-def feature_extraction(audio_file_name, fs=16000, max_frames=250, zcr_threshold=0.1, energy_threshold=0.1):
+def feature_extraction(audio_file_name, fs=16000, max_frames=80000, zcr_threshold=None, energy_threshold=None):
     audio, _ = sf.read(audio_file_name)
     audio = audio.astype(np.float32)
     
     audio=audio[fs*2:]
-    # audio=nr.reduce_noise(audio, sr=fs)
     voiced_features = extract_features(audio, fs, zcr_threshold, energy_threshold)
     
     voiced_features = voiced_features.T  # Shape: (n_frames, n_features)
@@ -50,12 +49,31 @@ def feature_extraction(audio_file_name, fs=16000, max_frames=250, zcr_threshold=
     return voiced_features
 
 def create_base_network(input_shape):
-    model=tf.keras.Sequential([
-        layers.Dense(128, activation='leaky_relu', input_shape=input_shape),
-        layers.Dropout(0.1),
-        layers.Dense(128, activation='leaky_relu', kernel_regularizer=tf.keras.regularizers.l2(0.01)),
-        layers.Dropout(0.1),
-        layers.Dense(128, activation='leaky_relu', kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+    model = tf.keras.Sequential([
+        layers.Conv1D(64, kernel_size=5, activation=None, input_shape=input_shape),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(alpha=0.1),
+        layers.MaxPooling1D(pool_size=2),
+
+        layers.Conv1D(128, kernel_size=5, activation=None, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(alpha=0.1),
+        layers.MaxPooling1D(pool_size=2),
+
+        layers.Conv1D(256, kernel_size=5, activation=None, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(alpha=0.1),
+        layers.GlobalMaxPooling1D(),
+
+        layers.Dense(128, activation=None, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(alpha=0.1),
+        layers.Dropout(0.5),
+
+        layers.Dense(64, activation=None, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(alpha=0.1),
+        layers.Dropout(0.5)
     ])
     return model
 
@@ -75,14 +93,15 @@ def create_siamese_network(input_shape):
 
     return Model(inputs=[input_a, input_b], outputs=distance)
 
-def contrastive_loss(y_true, y_pred, margin=1.0):
-    y_true = tf.cast(tf.reshape(y_true, (-1, 1)), tf.float32)  # Reshape to [batch_size, 1]
+def contrastive_loss(y_true, y_pred, margin=1):
+    """Contrastive loss as a custom loss function."""
+    y_true = tf.cast(y_true, tf.float32)
     squared_distance = tf.square(y_pred)
     margin_distance = tf.square(tf.maximum(margin - y_pred, 0))
     return tf.reduce_mean((1 - y_true) * squared_distance + y_true * margin_distance)
 
 def load_model(model_path):
-    model = create_siamese_network((250, 14))
+    model = create_siamese_network((80000, 14))
     model.load_weights(model_path)
     return model
 
@@ -93,6 +112,7 @@ def verify_speaker(new_features, original_feature_path, model_path):
     
     model = load_model(model_path)
     prediction = model.predict([new_features, features], verbose=0)
-    prediction = 0 if prediction[0][0].mean() < 0.5 else 1
-    
+    print(prediction)
+    prediction = 0 if prediction[0][0] <= 0.002 else 1
+    print(prediction)
     return prediction

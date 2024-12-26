@@ -18,7 +18,7 @@ def convert_flac_to_numpy(base_dir, max_frames=250):
     
     part_number = 0
     for folder in os.listdir(base_dir):
-        if len(folder.split('.')) > 1:  # Skip files
+        if len(folder.split('.')) > 1:
             continue
         print("Processing folder:", folder)
         for subfolder in os.listdir(os.path.join(base_dir, folder)):
@@ -36,7 +36,7 @@ def convert_flac_to_numpy(base_dir, max_frames=250):
                         labels.append(speaker_id)
             
             # Save data in chunks to avoid memory issues
-            if len(data) > 1000:
+            if len(data) > 200:
                 pickle.dump(data, open(f'dataset/features_part_{part_number}.pkl', 'wb'))
                 pickle.dump(labels, open(f'dataset/labels_part_{part_number}.pkl', 'wb'))
                 print(f'Saved part {part_number}')
@@ -45,6 +45,8 @@ def convert_flac_to_numpy(base_dir, max_frames=250):
                 data.clear()
                 labels.clear()
                 part_number += 1
+                if part_number > 100:
+                    break
     
     # Save metadata
     pickle.dump(len_features, open('dataset/feature_length.pkl', 'wb'))
@@ -62,30 +64,28 @@ def extract_features(audio, fs=16000, zcr_threshold=None, energy_threshold=None)
 
     # Extract pitch from highest magnitude bins
     pitch_values = []
-    for t in range(mag.shape[1]):  # Iterate over time frames
-        max_idx = mag[:, t].argmax()  # Index of max magnitude in frequency bins
+    for t in range(mag.shape[1]):
+        max_idx = mag[:, t].argmax()
         pitch_values.append(pitch[max_idx, t])
     pitch_values = np.array(pitch_values)
 
     # Compute thresholds if not provided
     if zcr_threshold is None:
-        zcr_threshold = np.mean(zcr)  # Adaptive threshold for ZCR
+        zcr_threshold = np.mean(zcr)
     if energy_threshold is None:
-        energy_threshold = np.mean(energy)  # Adaptive threshold for energy
+        energy_threshold = np.mean(energy)  
 
     # Detect voiced frames
     voiced_frames = [i for i in range(len(zcr)) if zcr[i] < zcr_threshold and energy[i] > energy_threshold]
 
-    # Get voiced features
     voiced_mfccs = mfccs[:, voiced_frames]
     voiced_pitch = pitch_values[voiced_frames]
 
-    # Combine MFCCs and pitch
     voiced_features = np.concatenate((voiced_mfccs, np.expand_dims(voiced_pitch, axis=0)), axis=0)
 
     return voiced_features
 
-def extract_features_from_audio(audio, fs=16000, max_frames=250, zcr_threshold=0.1, energy_threshold=0.1):
+def extract_features_from_audio(audio, fs=16000, max_frames=250, zcr_threshold=None, energy_threshold=None):
     """
     Extract features from an audio signal and ensure uniform shape.
     """
@@ -98,15 +98,13 @@ def extract_features_from_audio(audio, fs=16000, max_frames=250, zcr_threshold=0
     # Pad or truncate to ensure uniform frame length
     n_frames, n_features = voiced_features.shape
     if n_frames < max_frames:
-        # Pad with zeros
         padding = np.zeros((max_frames - n_frames, n_features))
         voiced_features = np.vstack((voiced_features, padding))
     else:
-        # Truncate to max_frames
         voiced_features = voiced_features[:max_frames, :]
 
     return voiced_features
 
 if __name__ == '__main__':
     base_dir = 'LibriSpeech'
-    convert_flac_to_numpy(base_dir)
+    convert_flac_to_numpy(base_dir, max_frames=16000*5)
