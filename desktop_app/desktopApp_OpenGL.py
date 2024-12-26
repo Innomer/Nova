@@ -475,7 +475,7 @@ class MainWindow(QMainWindow):
         self.voice_thread.start()
         self.threads.append(self.voice_thread)
     
-    def close(self,event):
+    def close(self,event=True):
         if event:
             for thread in self.threads:
                 thread.quit()

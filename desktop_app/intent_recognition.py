@@ -32,6 +32,7 @@ class IntentRecognition:
                 "Register": [
                     "User wants to register or sign up for an account.",
                     "User wants to make a new account.",
+                    "Create a account.",
                     "Sign me up.",
                     "Register.",
                     "Sign up.",
