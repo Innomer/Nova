@@ -169,3 +169,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+*.h5
+*.gz
+*.zip
+*.tar
+*.npy
+*.pkl
+ML/dataset/
+LibriSpeech/
+public/
