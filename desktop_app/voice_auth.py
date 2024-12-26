@@ -4,6 +4,8 @@ import librosa
 import noisereduce as nr
 import tensorflow as tf
 from tensorflow.keras import layers, Model
+import requests
+import os
 
 def extract_features(audio, fs=16000, zcr_threshold=None, energy_threshold=None):
     mfccs = librosa.feature.mfcc(y=audio, sr=fs, n_mfcc=13, n_fft=int(0.03 * fs), hop_length=int(0.02 * fs))
@@ -102,7 +104,14 @@ def contrastive_loss(y_true, y_pred, margin=1):
 
 def load_model(model_path):
     model = create_siamese_network((80000, 14))
-    model.load_weights(model_path)
+    if os.path.exists(model_path):
+        model.load_weights(model_path)
+    else:
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        response = requests.get('https://drive.google.com/uc?export=download&id=1Y2uRY-Ddb49482xn9H28aqzqdcqNt9kN')
+        with open(model_path, 'wb') as file:
+            file.write(response.content)
+        model.load_weights(model_path)
     return model
 
 def verify_speaker(new_features, original_feature_path, model_path):
@@ -113,6 +122,5 @@ def verify_speaker(new_features, original_feature_path, model_path):
     model = load_model(model_path)
     prediction = model.predict([new_features, features], verbose=0)
     print(prediction)
-    prediction = 0 if prediction[0][0] <= 0.002 else 1
-    print(prediction)
+    prediction = 0 if round(prediction[0][0],3) <= 0.005 else 1
     return prediction

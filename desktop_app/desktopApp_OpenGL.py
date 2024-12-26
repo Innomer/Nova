@@ -18,6 +18,8 @@ from voice_auth import feature_extraction, verify_speaker
 import noisereduce as nr
 import os
 import librosa
+from audio_transcribe import AudioTranscriber
+from intent_recognition import IntentRecognition
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -129,10 +131,13 @@ class VoiceRecognitionThread(QThread):
     speech_text_signal = pyqtSignal(str)  # Signal to pass text to the main thread
     pass_audio_signal = pyqtSignal(np.ndarray)  # Signal to pass audio data to GeneralFunctionalityThread
     processing_signal = pyqtSignal(bool)  # Signal to indicate processing state
+    exit_signal = pyqtSignal(bool)  # Signal to exit the thread
 
     def __init__(self):
         super().__init__()
-        self.recognizer = sr.Recognizer()
+        # self.recognizer = sr.Recognizer()
+        self.recognizer=AudioTranscriber()
+        self.intent_recognizer = IntentRecognition()
         self.queue = Queue()  # Queue to receive audio data from AudioThread
         self.loudness = 0.0
         self.activation_threshold = 1000
@@ -246,44 +251,51 @@ class VoiceRecognitionThread(QThread):
             print("Processing speech recognition...")
             audio_bytes = audio_array.tobytes()
             audio = sr.AudioData(audio_bytes, 44100, 2)
-            text = self.recognizer.recognize_google(audio)
+            sf.write("recordings/temp_voice_clip.wav", audio_array, 44100, subtype='PCM_16')
+            text=self.recognizer.transcribe_audio("recordings/temp_voice_clip.wav")
+            # text = self.recognizer.recognize_google(audio)
             print(f"Recognized Speech: {text}")
 
             self.speech_text_signal.emit(text)
             
-            if "register" in text.lower() and not self.registered_once:
-                self.intent = "register"
-                print("Intent: Register")
+            intent_label, closest_label, score = self.intent_recognizer.recognize_intent(text)
+            
+            self.intent = intent_label.lower()
+            print(f"Intent: {self.intent}")
+            if self.intent=="register" and not self.registered_once:
+                # print("Intent: Register")
                 self.pass_audio_signal.emit(audio_array)
                 self.registered_once = True
-            elif "register" in text.lower() and self.registered_once:
+            elif self.intent=='register' and self.registered_once:
                 if self.logged_in:
                     self.intent = "register"
-                    print("Intent: Register")
+                    # print("Intent: Register")
                     self.pass_audio_signal.emit(audio_array)
                 else:
                     print("Restricted Access") # Remind user to login
-            elif "login" in text.lower():
-                self.intent = "login"
-                print("Intent: Login")
+            elif self.intent=='login':
+                # print("Intent: Login")
                 self.pass_audio_signal.emit(audio_array)
-            elif "logout" in text.lower():
-                self.intent = "logout"
-                print("Intent: Logout")
+            elif self.intent=='logout':
+                # print("Intent: Logout")
                 self.logged_in=False
                 self.pass_audio_signal.emit(audio_array)
+            elif self.intent=='exit':
+                # print("Intent: Exit")
+                self.exit_signal.emit(True)
             else:
                 if self.logged_in:
-                    print("Intent: Other")
+                    print(self.intent , closest_label)
                     pass # Allow access to other stuff
                 else:
                     print("Restricted Access")
                     pass # Remind user to login
-
-        except sr.UnknownValueError:
-            print("Google Speech Recognition could not understand audio")
-        except sr.RequestError as e:
-            print(f"Could not request results from Google Speech Recognition service; {e}")
+        except Exception as e:
+            print(f"Speech recognition error: {e}")
+        # except sr.UnknownValueError:
+        #     print("Google Speech Recognition could not understand audio")
+        # except sr.RequestError as e:
+        #     print(f"Could not request results from Google Speech Recognition service; {e}")
 
 class GeneralFunctionalityThread(QThread):
     verification_result_signal = pyqtSignal(int)  # Signal to pass verification result to the main thread
@@ -356,8 +368,9 @@ class GeneralFunctionalityThread(QThread):
             print("Extracting features...")
             voiced_features = feature_extraction(file_name)
             os.remove(file_name)
-            saved_features_file = os.listdir("recordings")[0]
-            model_file = os.listdir("public")[0]
+            saved_features_file = "user_voice_features.npy"
+            # model_file = os.listdir("public")[0]
+            model_file = 'siamese_model.h5'
             verification_result = verify_speaker(voiced_features, f"recordings/{saved_features_file}", f"public/{model_file}")
             verification_result = int(verification_result)
             self.verification_result_signal.emit(verification_result)
@@ -432,6 +445,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Nova")
         self.setGeometry(100, 100, 800, 600)
+        self.threads = []
 
         # OpenGL Widget
         self.opengl_widget = OpenGLWidget()
@@ -440,11 +454,13 @@ class MainWindow(QMainWindow):
         self.general_functionality_thread = GeneralFunctionalityThread()
         self.general_functionality_thread.start()
         self.general_functionality_thread.verification_result_signal.connect(self.opengl_widget.set_color_based_on_verification_result)
+        self.threads.append(self.general_functionality_thread)
         
         # Start real-time loudness calculation in a separate thread
         self.audio_thread = AudioThread()
         self.audio_thread.loudness_signal.connect(self.opengl_widget.update_loudness)
         self.audio_thread.start()
+        self.threads.append(self.audio_thread)
 
         # Start voice recognition in a separate thread
         self.voice_thread = VoiceRecognitionThread()
@@ -455,7 +471,15 @@ class MainWindow(QMainWindow):
         self.voice_thread.pass_audio_signal.connect(self.general_functionality_thread.process_audio_clip)
         self.general_functionality_thread.voice_thread=self.voice_thread
         self.voice_thread.processing_signal.connect(self.opengl_widget.set_processing_state)
+        self.voice_thread.exit_signal.connect(self.closeEvent)
         self.voice_thread.start()
+        self.threads.append(self.voice_thread)
+    
+    def close(self,event):
+        if event:
+            for thread in self.threads:
+                thread.quit()
+                thread.wait()
         
 
 if __name__ == "__main__":

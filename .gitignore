@@ -175,5 +175,7 @@ cython_debug/
 *.zip
 *.tar
 *.npy
+*.pkl
 ML/dataset/
 LibriSpeech/
+public/
