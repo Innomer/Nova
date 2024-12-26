@@ -30,11 +30,24 @@ class Particle:
         
         self.color=(0.0, 0.8, 1.0)
         self.trail_color=(0.5, 0.8, 1.0)
+        self.processing=False
+        self.default_color=(0.0, 0.8, 1.0)
+        self.default_trail_color=(0.5, 0.8, 1.0)
+        self.processing_color=(0.0,0.6,0.6)
+        self.processing_trail_color=(0.5,0.6,0.6)
 
     def update(self, loudness):
-        # Update radius and speed based on loudness
-        self.radius = 0.1 + loudness / 2500.0
-        self.speed = 0.1 + loudness / 25000.0
+        if not self.processing:
+            # Update radius and speed based on loudness
+            self.radius = 0.1 + loudness / 2500.0
+            self.speed = 0.1 + loudness / 25000.0
+            self.color=self.default_color
+            self.trail_color=self.default_trail_color
+        else:
+            self.radius = np.random.uniform(0.3, 0.8)
+            self.speed = 0.5
+            self.color=self.processing_color
+            self.trail_color=self.processing_trail_color
 
         # Update angle
         self.angle += self.speed
@@ -43,12 +56,16 @@ class Particle:
 
         # Calculate new position
         angle_rad = radians(self.angle)
-        x = self.radius * cos(angle_rad) + pnoise2(self.x_offset, self.y_offset)
-        y = self.radius * sin(angle_rad) + pnoise2(self.x_offset + 0.5, self.y_offset + 0.5)
+        if not self.processing:
+            x = self.radius * cos(angle_rad) + pnoise2(self.x_offset, self.y_offset)
+            y = self.radius * sin(angle_rad) + pnoise2(self.x_offset + 0.5, self.y_offset + 0.5)
 
-        # Update Perlin noise offsets for smooth movement
-        self.x_offset += 0.01
-        self.y_offset += 0.01
+            # Update Perlin noise offsets for smooth movement
+            self.x_offset += 0.01
+            self.y_offset += 0.01
+        else:
+            x = self.radius * cos(angle_rad)
+            y = self.radius * sin(angle_rad)
 
         # Add the current position to history
         self.history.append((x, y))
@@ -111,6 +128,7 @@ class AudioThread(QThread):
 class VoiceRecognitionThread(QThread):
     speech_text_signal = pyqtSignal(str)  # Signal to pass text to the main thread
     pass_audio_signal = pyqtSignal(np.ndarray)  # Signal to pass audio data to GeneralFunctionalityThread
+    processing_signal = pyqtSignal(bool)  # Signal to indicate processing state
 
     def __init__(self):
         super().__init__()
@@ -159,6 +177,7 @@ class VoiceRecognitionThread(QThread):
                         print("Loudness above threshold, starting to track segment...")
 
                 elif self.processing:
+                    self.processing_signal.emit(True)
                     # Stop processing if loudness is low for 5 seconds
                     if time.time() - self.loudness_start_time > 5:
                         self.processing = False
@@ -177,6 +196,7 @@ class VoiceRecognitionThread(QThread):
                         # self.plot_audio_buffer(segment)
                         # self.play_audio(segment)
                         self.recognize_speech(segment)
+                self.processing_signal.emit(False)
 
             except Exception as e:
                 print(f"Error in VoiceRecognitionThread: {e}")
@@ -393,6 +413,10 @@ class OpenGLWidget(QOpenGLWidget):
         self.speech_text = text
         self.update()
     
+    def set_processing_state(self, state):
+        for particle in self.particles:
+            particle.processing=state
+    
     def set_color_based_on_verification_result(self, result):
         if result == 0:
             for particle in self.particles:
@@ -430,6 +454,7 @@ class MainWindow(QMainWindow):
         self.voice_thread.set_general_functionality_thread(self.general_functionality_thread)
         self.voice_thread.pass_audio_signal.connect(self.general_functionality_thread.process_audio_clip)
         self.general_functionality_thread.voice_thread=self.voice_thread
+        self.voice_thread.processing_signal.connect(self.opengl_widget.set_processing_state)
         self.voice_thread.start()
         
 
