@@ -20,8 +20,6 @@ logging.basicConfig(
     filename=f"{log_dir}/gemini_call.log", level=logging.INFO, format=FORMAT
 )
 logger.setLevel(logging.INFO)
-token_count = os.environ.get("TOKEN_COUNT", 0)
-num_requests = os.environ.get("NUM_REQUESTS", 0)
 
 
 class Intent(typing.TypedDict):
@@ -113,11 +111,6 @@ def fetch_intent_and_examples(intents, prompt):
     if response == 403:
         model = get_gemini_model(intents, get_label=True, model_name="models/gemini-1.5-flash-8b-latest")
         response = get_gemini_response(model, f"Get me intent of user query: {prompt}")
-    num_requests += 1
-    token_count += model.count_tokens(f"Get me intent of user query: {prompt}")
-    token_count += model.count_tokens(
-        f"You are an assistant tasked with determining the intent of the user's query. You are provided with a list of intents and examples {intents}. You should return the most suitable intent of the user as a single key with Verb Following the Noun Format (like OrderPizza). If the intent is not present in the provided list, return what you think the Intent is (as generic as possible). For example: \n Label: 'OrderPizza' \n Examples: ['I would like to order a pizza', 'Can I get a pizza', 'I want a pizza']"
-    )
     if response is None:
         logger.error("Response is None")
         return None, None
@@ -131,13 +124,6 @@ def fetch_intent_and_examples(intents, prompt):
                 pass
             else:
                 model = get_gemini_model(intents, get_label=False)
-                num_requests += 1
-                token_count += model.count_tokens(
-                    f"Get me examples of user query with the Intent: {label}"
-                )
-                token_count += model.count_tokens( 
-                    f"You have to return a list of 10 examples of the user's Intent. Cover as many variations as possible."
-                )
                 example_response = get_gemini_response(
                     model,
                     f"Get me examples of user query with the Intent: {label}",
@@ -154,11 +140,6 @@ def fetch_intent_and_examples(intents, prompt):
                     examples = example_response["examples"]
 
         logger.info(f"Intent: {label}, Examples: {examples}")
-        dotenv.set_key(".env", "TOKEN_COUNT", token_count)
-        dotenv.set_key(".env", "NUM_REQUESTS", num_requests)
-        os.environ["TOKEN_COUNT"] = token_count
-        os.environ["NUM_REQUESTS"] = num_requests
-        logger.info(f"Token count: {token_count}, Number of requests: {num_requests}")
         return label, examples
     except Exception as e:
         logger.error(f"Error in fetching intent and examples: {e}")

@@ -20,6 +20,12 @@ import os
 import librosa
 from audio_transcribe import AudioTranscriber
 from intent_recognition import IntentRecognition
+from elevenlabs import save
+from elevenlabs.client import ElevenLabs
+from pydub import AudioSegment
+from pydub.playback import play
+from dotenv import load_dotenv
+import io
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -153,6 +159,9 @@ class VoiceRecognitionThread(QThread):
         self.general_functionality_thread = None
         self.registered_once = False if not os.path.exists("recordings/user_voice_features.npy") else True
         self.logged_in=False
+        
+        self.elevenlabs = ElevenLabs(api_key=os.environ.get("ELEVENLABS_API_KEY"))
+        self.is_responding=False
 
         # Set up a live plot for dequeued audio data
         # self.fig, self.ax = plt.subplots()
@@ -174,7 +183,7 @@ class VoiceRecognitionThread(QThread):
                 self.sample_counter += len(audio_data)
 
                 # Handle loudness-triggered audio processing
-                if self.loudness >= self.activation_threshold:
+                if self.loudness >= self.activation_threshold and self.is_responding==False:
                     if not self.processing:
                         self.processing = True
                         self.loudness_start_time = time.time()
@@ -233,6 +242,17 @@ class VoiceRecognitionThread(QThread):
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
+    def play_response_audio(self, text):
+        self.is_responding=True
+        response = self.elevenlabs.generate(text=text, voice="Rachel", model="eleven_flash_v2_5")
+        save(response, 'recordings/temp_output.mp3')
+        audio=AudioSegment.from_mp3('recordings/temp_output.mp3')
+        time.sleep(1)
+        play(audio)
+        time.sleep(2)
+        os.remove("recordings/temp_output.mp3")
+        self.is_responding=False
+        
     def play_audio(self, audio_array):
         """Play the extracted audio segment."""
         print("Playing extracted audio segment...")
@@ -264,41 +284,50 @@ class VoiceRecognitionThread(QThread):
             print(f"Intent: {self.intent}")
             if self.intent=="register" and not self.registered_once:
                 # print("Intent: Register")
-                self.speech_text_signal.emit("Registering... Please remember what you said as that will act as your verification!")
+                # self.speech_text_signal.emit("Registering... Please remember what you said as that will act as your verification!")
+                self.play_response_audio("Registering.... Please remember your phrase for future verification!")
                 self.pass_audio_signal.emit(audio_array)
                 self.registered_once = True
             elif self.intent=='register' and self.registered_once:
                 if self.logged_in:
                     self.intent = "register"
                     # print("Intent: Register")
-                    self.speech_text_signal.emit("Re-Registering... Please note this replaces your previous method!")
+                    # self.speech_text_signal.emit("Re-Registering... Please note this replaces your previous method!")
+                    self.play_response_audio("Re-Registering.... Please remember your phrase for future verification!")
                     self.pass_audio_signal.emit(audio_array)
                 else:
                     print("Restricted Access") # Remind user to login
                     self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
+                    self.play_response_audio("Restricted Access! Please Login!")
             elif self.intent=='login':
                 # print("Intent: Login")
                 self.speech_text_signal.emit("Logging in...")
+                self.play_response_audio("Logging you in!")
                 self.pass_audio_signal.emit(audio_array)
             elif self.intent=='logout':
                 self.speech_text_signal.emit("Logging out...")
+                self.play_response_audio("Logging you out!")
                 # print("Intent: Logout")
                 self.logged_in=False
                 self.pass_audio_signal.emit(audio_array)
             elif self.intent=='exit':
                 # print("Intent: Exit")
-                self.speech_text_signal.emit("Exiting the application...")
+                # self.speech_text_signal.emit("Exiting the application...")
+                self.play_response_audio("I will be shutting down now! Goodbye!")
                 self.exit_signal.emit(True)
             elif self.intent=='greet':
                 # print("Intent: Greet")
-                self.speech_text_signal.emit("Hello! How can I help you?")
+                # self.speech_text_signal.emit("Hello! How can I help you?")
+                self.play_response_audio("Hello! How are you today?")
             else:
                 if self.logged_in:
                     print(self.intent , response)
-                    self.speech_text_signal.emit(f"Intent Identified as {self.intent}! Responses: {response}")
+                    # self.speech_text_signal.emit(f"Intent Identified as {self.intent}! Responses: {response}")
+                    self.play_response_audio("Intent Identified as "+self.intent+"!")
                 else:
                     print("Restricted Access")
-                    self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
+                    # self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
+                    self.play_response_audio("Restricted Access! Please Login!")
         except Exception as e:
             print(f"Speech recognition error: {e}")
 
@@ -488,6 +517,7 @@ class MainWindow(QMainWindow):
         
 
 if __name__ == "__main__":
+    load_dotenv()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

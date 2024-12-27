@@ -9,15 +9,14 @@ class IntentRecognition:
     def __init__(self, base_dir="public/", threshold=0.5):
         self.base_dir = base_dir
         self.threshold = threshold
-        self.model = self.load_model()
-        self.intents = self.load_intents()
-        self.intent_embeddings = self.load_intent_embeddings()
         self.logger = logging.getLogger(__name__)
         self.log_dir = "logs/"
-        self.logger.setLevel(logging.DEBUG)
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
         logging.basicConfig(filename=f"{self.log_dir}/intent_recognition.log", level=logging.INFO, format="[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s")
+        self.model = self.load_model()
+        self.intents = self.load_intents()
+        self.intent_embeddings = self.load_intent_embeddings()
 
     def load_model(self):
         try:
