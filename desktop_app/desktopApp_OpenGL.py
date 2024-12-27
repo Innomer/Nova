@@ -151,7 +151,7 @@ class VoiceRecognitionThread(QThread):
         
         self.intent = None
         self.general_functionality_thread = None
-        self.registered_once = False
+        self.registered_once = False if not os.path.exists("recordings/user_voice_features.npy") else True
         self.logged_in=False
 
         # Set up a live plot for dequeued audio data
@@ -258,44 +258,49 @@ class VoiceRecognitionThread(QThread):
 
             self.speech_text_signal.emit(text)
             
-            intent_label, closest_label, score = self.intent_recognizer.recognize_intent(text)
+            intent_label, response, score = self.intent_recognizer.intent_recognition(text)
             
             self.intent = intent_label.lower()
             print(f"Intent: {self.intent}")
             if self.intent=="register" and not self.registered_once:
                 # print("Intent: Register")
+                self.speech_text_signal.emit("Registering... Please remember what you said as that will act as your verification!")
                 self.pass_audio_signal.emit(audio_array)
                 self.registered_once = True
             elif self.intent=='register' and self.registered_once:
                 if self.logged_in:
                     self.intent = "register"
                     # print("Intent: Register")
+                    self.speech_text_signal.emit("Re-Registering... Please note this replaces your previous method!")
                     self.pass_audio_signal.emit(audio_array)
                 else:
                     print("Restricted Access") # Remind user to login
+                    self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
             elif self.intent=='login':
                 # print("Intent: Login")
+                self.speech_text_signal.emit("Logging in...")
                 self.pass_audio_signal.emit(audio_array)
             elif self.intent=='logout':
+                self.speech_text_signal.emit("Logging out...")
                 # print("Intent: Logout")
                 self.logged_in=False
                 self.pass_audio_signal.emit(audio_array)
             elif self.intent=='exit':
                 # print("Intent: Exit")
+                self.speech_text_signal.emit("Exiting the application...")
                 self.exit_signal.emit(True)
+            elif self.intent=='greet':
+                # print("Intent: Greet")
+                self.speech_text_signal.emit("Hello! How can I help you?")
             else:
                 if self.logged_in:
-                    print(self.intent , closest_label)
-                    pass # Allow access to other stuff
+                    print(self.intent , response)
+                    self.speech_text_signal.emit(f"Intent Identified as {self.intent}! Responses: {response}")
                 else:
                     print("Restricted Access")
-                    pass # Remind user to login
+                    self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
         except Exception as e:
             print(f"Speech recognition error: {e}")
-        # except sr.UnknownValueError:
-        #     print("Google Speech Recognition could not understand audio")
-        # except sr.RequestError as e:
-        #     print(f"Could not request results from Google Speech Recognition service; {e}")
 
 class GeneralFunctionalityThread(QThread):
     verification_result_signal = pyqtSignal(int)  # Signal to pass verification result to the main thread

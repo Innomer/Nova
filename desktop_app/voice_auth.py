@@ -6,30 +6,44 @@ import tensorflow as tf
 from tensorflow.keras import layers, Model
 import requests
 import os
+import logging
+
+os.makedirs("logs", exist_ok=True)
+log_dir = 'logs'
+logger = logging.getLogger(__name__)
+FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
+logging.basicConfig(filename=f"{log_dir}/voice_auth.log", level=logging.INFO, format=FORMAT)
+logger.setLevel(logging.INFO)
 
 def extract_features(audio, fs=16000, zcr_threshold=None, energy_threshold=None):
-    mfccs = librosa.feature.mfcc(y=audio, sr=fs, n_mfcc=13, n_fft=int(0.03 * fs), hop_length=int(0.02 * fs))
-    zcr = librosa.feature.zero_crossing_rate(y=audio, frame_length=int(0.03 * fs), hop_length=int(0.02 * fs))[0]
-    pitch, mag = librosa.piptrack(y=audio, sr=fs, n_fft=int(0.03 * fs), hop_length=int(0.02 * fs))
-    energy = librosa.feature.rms(y=audio, frame_length=int(0.03 * fs), hop_length=int(0.02 * fs))[0]
+    try:
+        logger.info("Extracting features from audio")
+        mfccs = librosa.feature.mfcc(y=audio, sr=fs, n_mfcc=13, n_fft=int(0.03 * fs), hop_length=int(0.02 * fs))
+        zcr = librosa.feature.zero_crossing_rate(y=audio, frame_length=int(0.03 * fs), hop_length=int(0.02 * fs))[0]
+        pitch, mag = librosa.piptrack(y=audio, sr=fs, n_fft=int(0.03 * fs), hop_length=int(0.02 * fs))
+        energy = librosa.feature.rms(y=audio, frame_length=int(0.03 * fs), hop_length=int(0.02 * fs))[0]
+        logger.info("Features extracted successfully")
+        
+        pitch_values = []
+        for t in range(mag.shape[1]):
+            max_idx = mag[:, t].argmax()
+            pitch_values.append(pitch[max_idx, t])
+        pitch_values = np.array(pitch_values)
 
-    pitch_values = []
-    for t in range(mag.shape[1]):
-        max_idx = mag[:, t].argmax()
-        pitch_values.append(pitch[max_idx, t])
-    pitch_values = np.array(pitch_values)
+        if zcr_threshold is None:
+            zcr_threshold = np.mean(zcr)
+        if energy_threshold is None:
+            energy_threshold = np.mean(energy)
 
-    if zcr_threshold is None:
-        zcr_threshold = np.mean(zcr)
-    if energy_threshold is None:
-        energy_threshold = np.mean(energy)
+        voiced_frames = [i for i in range(len(zcr)) if zcr[i] < zcr_threshold and energy[i] > energy_threshold]
+        logger.debug(f"Voiced frames: {len(voiced_frames)}")
 
-    voiced_frames = [i for i in range(len(zcr)) if zcr[i] < zcr_threshold and energy[i] > energy_threshold]
-
-    voiced_mfccs = mfccs[:, voiced_frames]
-    voiced_pitch = pitch_values[voiced_frames]
-    voiced_features = np.concatenate((voiced_mfccs, np.expand_dims(voiced_pitch, axis=0)), axis=0)
-
+        voiced_mfccs = mfccs[:, voiced_frames]
+        voiced_pitch = pitch_values[voiced_frames]
+        voiced_features = np.concatenate((voiced_mfccs, np.expand_dims(voiced_pitch, axis=0)), axis=0)
+    except Exception as e:
+        logger.error(f"Error extracting features: {e}")
+        voiced_features = None
     return voiced_features
 
 def feature_extraction(audio_file_name, fs=16000, max_frames=80000, zcr_threshold=None, energy_threshold=None):
@@ -115,12 +129,18 @@ def load_model(model_path):
     return model
 
 def verify_speaker(new_features, original_feature_path, model_path):
-    features = np.load(original_feature_path)
-    features = np.expand_dims(features, axis=0)
-    new_features = np.expand_dims(new_features, axis=0)
-    
-    model = load_model(model_path)
-    prediction = model.predict([new_features, features], verbose=0)
-    print(prediction)
-    prediction = 0 if round(prediction[0][0],3) <= 0.005 else 1
+    try:
+        features = np.load(original_feature_path)
+        features = np.expand_dims(features, axis=0)
+        new_features = np.expand_dims(new_features, axis=0)
+        
+        model = load_model(model_path)
+        logger.info("Features and Model successfully")
+        prediction = model.predict([new_features, features], verbose=0)
+        logger.info(f"Prediction: {prediction}")
+        print(prediction)
+        prediction = 0 if round(prediction[0][0],3) <= 0.005 else 1
+    except Exception as e:
+        logger.error(f"Error verifying speaker: {e}")
+        prediction = 1
     return prediction
