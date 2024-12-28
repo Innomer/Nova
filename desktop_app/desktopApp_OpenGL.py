@@ -26,6 +26,7 @@ from pydub import AudioSegment
 from pydub.playback import play
 from dotenv import load_dotenv
 import io
+from cohere_calls import generate_cohere_response
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -191,7 +192,7 @@ class VoiceRecognitionThread(QThread):
                         print("Loudness above threshold, starting to track segment...")
 
                 elif self.processing:
-                    self.processing_signal.emit(True)
+                    # self.processing_signal.emit(True)
                     # Stop processing if loudness is low for 5 seconds
                     if time.time() - self.loudness_start_time > 5:
                         self.processing = False
@@ -210,7 +211,7 @@ class VoiceRecognitionThread(QThread):
                         # self.plot_audio_buffer(segment)
                         # self.play_audio(segment)
                         self.recognize_speech(segment)
-                self.processing_signal.emit(False)
+                # self.processing_signal.emit(False)
 
             except Exception as e:
                 print(f"Error in VoiceRecognitionThread: {e}")
@@ -247,11 +248,18 @@ class VoiceRecognitionThread(QThread):
         response = self.elevenlabs.generate(text=text, voice="Rachel", model="eleven_flash_v2_5")
         save(response, 'recordings/temp_output.mp3')
         audio=AudioSegment.from_mp3('recordings/temp_output.mp3')
-        time.sleep(1)
+        silence = AudioSegment.silent(duration=1500)
+        audio = silence + audio + silence
         play(audio)
-        time.sleep(2)
         os.remove("recordings/temp_output.mp3")
         self.is_responding=False
+        
+    def get_and_play_responses(self, intent_label,text,tense, response_text=None):
+        if response_text is None:
+            text_generic_response=generate_cohere_response(intent_label, text, tense)
+            self.play_response_audio(text_generic_response)
+        else:
+            self.play_response_audio(response_text)
         
     def play_audio(self, audio_array):
         """Play the extracted audio segment."""
@@ -268,6 +276,7 @@ class VoiceRecognitionThread(QThread):
     def recognize_speech(self, audio_array):
         """Recognize speech from the extracted audio."""
         try:
+            self.processing_signal.emit(True)
             print("Processing speech recognition...")
             audio_bytes = audio_array.tobytes()
             audio = sr.AudioData(audio_bytes, 44100, 2)
@@ -283,52 +292,61 @@ class VoiceRecognitionThread(QThread):
             self.intent = intent_label.lower()
             print(f"Intent: {self.intent}")
             if self.intent=="register" and not self.registered_once:
-                # print("Intent: Register")
-                # self.speech_text_signal.emit("Registering... Please remember what you said as that will act as your verification!")
-                self.play_response_audio("Registering.... Please remember your phrase for future verification!")
-                self.pass_audio_signal.emit(audio_array)
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                response_thread.start()
+                response_thread.join()
                 self.registered_once = True
+                self.pass_audio_signal.emit(audio_array)
             elif self.intent=='register' and self.registered_once:
                 if self.logged_in:
                     self.intent = "register"
-                    # print("Intent: Register")
-                    # self.speech_text_signal.emit("Re-Registering... Please note this replaces your previous method!")
-                    self.play_response_audio("Re-Registering.... Please remember your phrase for future verification!")
+                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                    response_thread.start()
+                    response_thread.join()
                     self.pass_audio_signal.emit(audio_array)
                 else:
-                    print("Restricted Access") # Remind user to login
                     self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
-                    self.play_response_audio("Restricted Access! Please Login!")
+                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, "Restricted Access! Please Login!"))
+                    response_thread.start()
+                    response_thread.join()
             elif self.intent=='login':
-                # print("Intent: Login")
                 self.speech_text_signal.emit("Logging in...")
-                self.play_response_audio("Logging you in!")
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                response_thread.start()
+                response_thread.join()
                 self.pass_audio_signal.emit(audio_array)
             elif self.intent=='logout':
                 self.speech_text_signal.emit("Logging out...")
-                self.play_response_audio("Logging you out!")
-                # print("Intent: Logout")
-                self.logged_in=False
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                response_thread.start()    
+                response_thread.join()
                 self.pass_audio_signal.emit(audio_array)
+                self.logged_in=False
             elif self.intent=='exit':
-                # print("Intent: Exit")
-                # self.speech_text_signal.emit("Exiting the application...")
-                self.play_response_audio("I will be shutting down now! Goodbye!")
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, "I will be shutting down now! Goodbye!"))
+                response_thread.start()
+                response_thread.join()
                 self.exit_signal.emit(True)
             elif self.intent=='greet':
-                # print("Intent: Greet")
-                # self.speech_text_signal.emit("Hello! How can I help you?")
-                self.play_response_audio("Hello! How are you today?")
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,0))
+                response_thread.start()
+                response_thread.join()
             else:
                 if self.logged_in:
                     print(self.intent , response)
-                    # self.speech_text_signal.emit(f"Intent Identified as {self.intent}! Responses: {response}")
-                    self.play_response_audio("Intent Identified as "+self.intent+"!")
+                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,0))
+                    response_thread.start()
+                    response_thread.join()
                 else:
-                    print("Restricted Access")
-                    # self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
-                    self.play_response_audio("Restricted Access! Please Login!")
+                    self.speech_text_signal.emit("Restricted Access! Please Login!")
+                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, "Restricted Access! Please Login!"))
+                    response_thread.start()
+                    response_thread.join()
+            self.processing_signal.emit(False)
         except Exception as e:
+            response_thread=threading.Thread(target=self.get_and_play_responses, args=("error","error",1, "I am sorry, I did not understand that!"))
+            response_thread.start()
+            response_thread.join()
             print(f"Speech recognition error: {e}")
 
 class GeneralFunctionalityThread(QThread):
@@ -362,7 +380,8 @@ class GeneralFunctionalityThread(QThread):
 
         # Normalize and save audio as WAV file
         audio_array = np.int16(audio_array / np.max(np.abs(audio_array)) * 32767)
-        file_name = f"recordings/voice_clip_{int(time.time())}.wav"       
+        file_name = f"recordings/voice_clip_{int(time.time())}.wav"  
+             
         # Create a thread for feature extraction
         def extract_features():
             print("Reducing noise and saving audio clip...")
@@ -410,6 +429,10 @@ class GeneralFunctionalityThread(QThread):
             self.verification_result_signal.emit(verification_result)
             print(f"Verification result: {verification_result}")
             self.voice_thread.logged_in=True if verification_result==0 else False
+            if verification_result==1:
+                inner_thread=threading.Thread(target=self.voice_thread.get_and_play_responses, args=("error","error",1, "Voice Sample did not match! Access Denied!"))
+                inner_thread.start()
+                inner_thread.join()
 
         feature_thread = threading.Thread(target=extract_features)
         feature_thread.start()
