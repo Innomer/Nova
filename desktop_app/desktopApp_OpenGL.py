@@ -2,8 +2,10 @@ import sys
 import threading
 import numpy as np
 from collections import deque
-from PyQt5.QtWidgets import QApplication, QMainWindow, QOpenGLWidget, QLabel
-from PyQt5.QtCore import QTimer, QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QMainWindow, QOpenGLWidget, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPropertyAnimation, QRect, QCoreApplication, pyqtProperty
+from PyQt5.QtGui import QPainter, QColor
+from PyQt5.QtCore import Qt
 from OpenGL.GL import *
 from noise import pnoise2
 import pyaudio
@@ -497,6 +499,134 @@ class OpenGLWidget(QOpenGLWidget):
                 particle.update_color((1.0, 0.0, 0.0), (1.0, 0.5, 0.5))
             self.background_color=(0.2, 0.1, 0.1, 1.0)
 
+class CanvasOverlay(QWidget):
+    def __init__(self, parent=None):
+        super(CanvasOverlay, self).__init__(parent)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.components = []  # Track runtime components
+        self._opacity = 0.0  # Start with 0 opacity (hidden)
+        self.has_background = False
+
+        # Set up animations
+        self.fade_animation = QPropertyAnimation(self, b"opacity")
+        self.fade_animation.setDuration(500)  # Duration in milliseconds
+
+        self.resize_animation = QPropertyAnimation(self, b"geometry")
+        self.resize_animation.setDuration(500)  # Duration in milliseconds
+
+        self.setStyleSheet("background: transparent;")
+
+    @pyqtProperty(float)
+    def opacity(self):
+        """Custom property for animating opacity."""
+        return self._opacity
+
+    @opacity.setter
+    def opacity(self, value):
+        self._opacity = value
+        self.setWindowOpacity(self._opacity)  # Adjust the window opacity
+        self.update()
+
+    def add_component(self, component):
+        """Dynamically add a component to the canvas."""
+        self.components.append(component)
+        component.setParent(self)
+        component.show()
+        self.show_with_animation()
+
+    def clear_components(self):
+        """Remove all components from the canvas."""
+        for component in self.components:
+            component.setParent(None)
+            component.deleteLater()
+        self.components = []
+        self.hide_with_animation()
+
+    def show_with_animation(self):
+        """Smoothly fade in and grow the canvas."""
+        if not self.has_background:  # Only animate if not already visible
+            self.has_background = True
+            self.show()  # Make sure the widget is visible
+
+            # Set up fade-in animation
+            self.fade_animation.stop()
+            self.fade_animation.setStartValue(0.0)
+            self.fade_animation.setEndValue(1.0)
+
+            # Set up grow animation
+            self.resize_animation.stop()
+            parent_rect = self.parentWidget().rect()
+            start_rect = QRect(parent_rect.width() // 2, parent_rect.height() // 2, 0, 0)
+            end_rect = parent_rect.adjusted(20, 20, -20, -20)  # Slightly smaller than parent
+
+            self.setGeometry(start_rect)  # Start with collapsed size
+            self.resize_animation.setStartValue(start_rect)
+            self.resize_animation.setEndValue(end_rect)
+
+            # Start animations
+            self.fade_animation.start()
+            self.resize_animation.start()
+
+    def hide_with_animation(self):
+        """Smoothly fade out and shrink the canvas."""
+        if self.has_background:  # Only animate if currently visible
+            
+            # Set up fade-out animation
+            self.fade_animation.stop()
+            self.fade_animation.setStartValue(1.0)
+            self.fade_animation.setEndValue(0.0)
+
+            # Set up shrink animation
+            self.resize_animation.stop()
+            parent_rect = self.parentWidget().rect()
+            end_rect = QRect(parent_rect.width() // 2, parent_rect.height() // 2, 0, 0)
+
+            self.resize_animation.setStartValue(self.parentWidget().rect().adjusted(20, 20, -20, -20))
+            self.resize_animation.setEndValue(end_rect)
+
+            # Start animations
+            self.fade_animation.start()
+            self.resize_animation.start()
+
+            # Hide widget when animation finishes
+            self.fade_animation.finished.connect(self._finalize_hide)
+
+    def _finalize_hide(self):
+        """Finalize hiding the canvas."""
+        self.has_background = False
+        self.hide()
+
+    def paintEvent(self, event):
+        """Draw the semi-transparent background if needed."""
+        if self.has_background:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+
+            # Semi-transparent rounded rectangle
+            rect = self.rect().adjusted(0, 0, 0, 0)
+            color = QColor(0, 0, 0, 128)  # Semi-transparent black
+            painter.setBrush(color)
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(rect, 15, 15)  # Rounded corners
+
+    def mousePressEvent(self, event):
+        """Pass mouse press events to child widgets."""
+        for component in self.components:
+            if component.geometry().contains(event.pos()):
+                QCoreApplication.sendEvent(component, event)
+
+    def mouseReleaseEvent(self, event):
+        """Pass mouse release events to child widgets."""
+        for component in self.components:
+            if component.geometry().contains(event.pos()):
+                QCoreApplication.sendEvent(component, event)
+
+    def mouseMoveEvent(self, event):
+        """Pass mouse move events to child widgets."""
+        for component in self.components:
+            if component.geometry().contains(event.pos()):
+                QCoreApplication.sendEvent(component, event)
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -507,6 +637,10 @@ class MainWindow(QMainWindow):
         # OpenGL Widget
         self.opengl_widget = OpenGLWidget()
         self.setCentralWidget(self.opengl_widget)
+        
+        # Add Canvas Overlay
+        self.canvas_overlay = CanvasOverlay(self)
+        self.canvas_overlay.setGeometry(self.opengl_widget.geometry())
 
         self.general_functionality_thread = GeneralFunctionalityThread()
         self.general_functionality_thread.start()
@@ -532,13 +666,37 @@ class MainWindow(QMainWindow):
         self.voice_thread.start()
         self.threads.append(self.voice_thread)
     
+    # def add_sample_components_to_canvas(self):
+    #     """Example to dynamically add components to the canvas."""
+    #     from PyQt5.QtWidgets import QPushButton, QLabel
+
+    #     # Example button
+    #     button = QPushButton("Click Me", self)
+    #     button.move(100, 100)
+    #     button.clicked.connect(lambda: print("Button clicked!"))
+    #     self.canvas_overlay.add_component(button)
+
+    #     # Example label
+    #     label = QLabel("Dynamic Overlay Label", self)
+    #     label.move(100, 150)
+    #     label.setStyleSheet("color: white; font-size: 14px;")
+    #     self.canvas_overlay.add_component(label)
+
+    #     # Example: Clear components after 5 seconds (for demonstration)
+    #     QTimer.singleShot(20000, self.canvas_overlay.clear_components)
+        
+    def resizeEvent(self, event):
+        """Ensure the canvas overlay matches the OpenGL widget size on resize."""
+        super(MainWindow, self).resizeEvent(event)
+        self.canvas_overlay.setGeometry(self.opengl_widget.geometry())
+        self.canvas_overlay.setGeometry(self.canvas_overlay.parentWidget().rect().adjusted(20, 20, -20, -20))
+    
     def close(self,event=True):
         if event:
             for thread in self.threads:
                 thread.quit()
                 thread.wait()
         
-
 if __name__ == "__main__":
     load_dotenv()
     app = QApplication(sys.argv)
