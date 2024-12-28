@@ -29,6 +29,11 @@ class Intent(typing.TypedDict):
 class IntentExamples(typing.TypedDict):
     examples: list[str]
 
+class funcDetails(typing.TypedDict):
+    functionName: str
+    functionContent: str
+    functionParameters: list[str]
+
 def get_gemini_model(intents, get_label=True, model_name="models/gemini-1.5-pro-latest"):
     if intents is None:
         logger.error("Intents are None")
@@ -144,3 +149,44 @@ def fetch_intent_and_examples(intents, prompt):
     except Exception as e:
         logger.error(f"Error in fetching intent and examples: {e}")
         return None, None
+    
+def update_canvas(intent, query):
+    example_function = '''def add_components_to_canvas(canvas_overlay, text=None):
+        """Example to dynamically add components to the canvas."""
+        
+        # Include any and all imports needed for the components
+        from PyQt5.QtWidgets import QPushButton, QLabel, QWidget
+        from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QPropertyAnimation, QRect, QCoreApplication, pyqtProperty
+        from PyQt5.QtGui import QPainter, QColor
+
+        # Example button
+        button = QPushButton("Click Me", self)
+        button.move(100, 100)
+        button.clicked.connect(lambda: print("Button clicked!"))
+        canvas_overlay.add_component(button)
+
+        # Example label
+        label = QLabel("Dynamic Overlay Label", self)
+        label.move(100, 150)
+        label.setStyleSheet("color: white; font-size: 14px;")
+        canvas_overlay.add_component(label)'''
+    model = genai.GenerativeModel(
+                model_name="models/gemini-1.5-flash-8b-latest",
+                system_instruction=(
+                    f"Given the example function template: {example_function}, generate the functionContent, functionName and functionParameters with the exact same function definition to incorporate information from a LLM response {query} for user intent {intent}. Make the UI as clean and simple as possible and always use WHITE/BRIGHT colors for texts. Omit any miscellaneous symbols and use English alphabets and numbers only."
+                ),
+            )
+    logger.info(f"Getting Gemini model for updating canvas for intent {intent} with query {query}")
+    response=model.generate_content(
+                f"Generate function to update canvas for intent {intent} with query {query}",
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json", response_schema=list[funcDetails]
+                ),
+            )
+    logger.info(f"Response received from Gemini: {response}")
+    logger.debug(f"Response usage_metadata: {response.usage_metadata}")
+    response = response.candidates[0].content.parts[0].text
+    with open("canvas_update.py", "w") as f:
+        response = ast.literal_eval(response)
+        f.write(response[0]['functionContent'])
+    return response[0]['functionName'], response[0]['functionContent'], response[0]['functionParameters']

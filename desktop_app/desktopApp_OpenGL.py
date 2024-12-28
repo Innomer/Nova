@@ -29,6 +29,9 @@ from pydub.playback import play
 from dotenv import load_dotenv
 import io
 from cohere_calls import generate_cohere_response
+import importlib
+import canvas_update
+from gemini_calls import update_canvas
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -141,6 +144,7 @@ class VoiceRecognitionThread(QThread):
     pass_audio_signal = pyqtSignal(np.ndarray)  # Signal to pass audio data to GeneralFunctionalityThread
     processing_signal = pyqtSignal(bool)  # Signal to indicate processing state
     exit_signal = pyqtSignal(bool)  # Signal to exit the thread
+    canvas_change_signal = pyqtSignal(str)  # Signal to change the canvas overlay
 
     def __init__(self):
         super().__init__()
@@ -259,6 +263,7 @@ class VoiceRecognitionThread(QThread):
     def get_and_play_responses(self, intent_label,text,tense, response_text=None):
         if response_text is None:
             text_generic_response=generate_cohere_response(intent_label, text, tense)
+            self.canvas_change_signal.emit(text_generic_response)
             self.play_response_audio(text_generic_response)
         else:
             self.play_response_audio(response_text)
@@ -433,6 +438,10 @@ class GeneralFunctionalityThread(QThread):
             self.voice_thread.logged_in=True if verification_result==0 else False
             if verification_result==1:
                 inner_thread=threading.Thread(target=self.voice_thread.get_and_play_responses, args=("error","error",1, "Voice Sample did not match! Access Denied!"))
+                inner_thread.start()
+                inner_thread.join()
+            else:
+                inner_thread=threading.Thread(target=self.voice_thread.get_and_play_responses, args=("success","success",1, "Voice Sample matched! Access Granted!"))
                 inner_thread.start()
                 inner_thread.join()
 
@@ -663,27 +672,24 @@ class MainWindow(QMainWindow):
         self.general_functionality_thread.voice_thread=self.voice_thread
         self.voice_thread.processing_signal.connect(self.opengl_widget.set_processing_state)
         self.voice_thread.exit_signal.connect(self.closeEvent)
+        self.voice_thread.canvas_change_signal.connect(self.update_canvas_main)
         self.voice_thread.start()
         self.threads.append(self.voice_thread)
     
-    # def add_sample_components_to_canvas(self):
-    #     """Example to dynamically add components to the canvas."""
-    #     from PyQt5.QtWidgets import QPushButton, QLabel
-
-    #     # Example button
-    #     button = QPushButton("Click Me", self)
-    #     button.move(100, 100)
-    #     button.clicked.connect(lambda: print("Button clicked!"))
-    #     self.canvas_overlay.add_component(button)
-
-    #     # Example label
-    #     label = QLabel("Dynamic Overlay Label", self)
-    #     label.move(100, 150)
-    #     label.setStyleSheet("color: white; font-size: 14px;")
-    #     self.canvas_overlay.add_component(label)
-
-    #     # Example: Clear components after 5 seconds (for demonstration)
-    #     QTimer.singleShot(20000, self.canvas_overlay.clear_components)
+    def update_canvas_main(self, text):
+        self.canvas_overlay.clear_components()
+        response, content, params=update_canvas(self.voice_thread.intent, text)
+        try:
+            importlib.reload(canvas_update)
+            if len(params)==1:
+                getattr(canvas_update, response)(self.canvas_overlay)
+            elif len(params)==2:
+                getattr(canvas_update, response)(self.canvas_overlay, text)
+        except Exception as e:
+            print(f"Error in updating canvas: {e}")
+            with open("canvas_update.py", "w") as f:
+                f.write("def add_components_to_canvas(canvas_overlay, text=None):\n    pass")
+            self.canvas_overlay.add_component(QLabel("Error in updating canvas!"))
         
     def resizeEvent(self, event):
         """Ensure the canvas overlay matches the OpenGL widget size on resize."""
