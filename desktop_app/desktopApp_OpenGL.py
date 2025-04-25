@@ -31,7 +31,13 @@ import io
 from cohere_calls import generate_cohere_response
 import importlib
 import canvas_update
-from gemini_calls import update_canvas
+from gpt_canvas import generate_function
+import json
+import random
+import presupported_canvas_functions
+import backend_services
+import ast
+import gemini_calls
 class Particle:
     def __init__(self):
         self.angle = np.random.uniform(0, 360)
@@ -165,10 +171,11 @@ class VoiceRecognitionThread(QThread):
         self.intent = None
         self.general_functionality_thread = None
         self.registered_once = False if not os.path.exists("recordings/user_voice_features.npy") else True
-        self.logged_in=False
+        self.logged_in=True
         
         self.elevenlabs = ElevenLabs(api_key=os.environ.get("ELEVENLABS_API_KEY"))
         self.is_responding=False
+        self.default_responses=json.load(open("public/responses.json"))
 
         # Set up a live plot for dequeued audio data
         # self.fig, self.ax = plt.subplots()
@@ -197,7 +204,7 @@ class VoiceRecognitionThread(QThread):
                         self.start_sample_index = self.sample_counter
                         print("Loudness above threshold, starting to track segment...")
 
-                elif self.processing:
+                elif self.processing and self.is_responding==False:
                     # self.processing_signal.emit(True)
                     # Stop processing if loudness is low for 5 seconds
                     if time.time() - self.loudness_start_time > 5:
@@ -254,7 +261,7 @@ class VoiceRecognitionThread(QThread):
         response = self.elevenlabs.generate(text=text, voice="Rachel", model="eleven_flash_v2_5")
         save(response, 'recordings/temp_output.mp3')
         audio=AudioSegment.from_mp3('recordings/temp_output.mp3')
-        silence = AudioSegment.silent(duration=1500)
+        silence = AudioSegment.silent(duration=500)
         audio = silence + audio + silence
         play(audio)
         os.remove("recordings/temp_output.mp3")
@@ -299,7 +306,7 @@ class VoiceRecognitionThread(QThread):
             self.intent = intent_label.lower()
             print(f"Intent: {self.intent}")
             if self.intent=="register" and not self.registered_once:
-                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, random.choice(self.default_responses["Register"])))
                 response_thread.start()
                 response_thread.join()
                 self.registered_once = True
@@ -307,37 +314,47 @@ class VoiceRecognitionThread(QThread):
             elif self.intent=='register' and self.registered_once:
                 if self.logged_in:
                     self.intent = "register"
-                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, random.choice(self.default_responses["Register"])))
                     response_thread.start()
                     response_thread.join()
                     self.pass_audio_signal.emit(audio_array)
                 else:
                     self.speech_text_signal.emit("Restricted Access! Please Login!") # Remind user to login
-                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, "Restricted Access! Please Login!"))
+                    response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, random.choice(self.default_responses["RestrictedAccess"])))
                     response_thread.start()
                     response_thread.join()
             elif self.intent=='login':
                 self.speech_text_signal.emit("Logging in...")
-                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, random.choice(self.default_responses["Login"])))
                 response_thread.start()
                 response_thread.join()
                 self.pass_audio_signal.emit(audio_array)
             elif self.intent=='logout':
                 self.speech_text_signal.emit("Logging out...")
-                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1))
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, random.choice(self.default_responses["Logout"])))
                 response_thread.start()    
                 response_thread.join()
                 self.pass_audio_signal.emit(audio_array)
                 self.logged_in=False
             elif self.intent=='exit':
-                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, "I will be shutting down now! Goodbye!"))
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,1, random.choice(self.default_responses["Exit"])))
                 response_thread.start()
                 response_thread.join()
                 self.exit_signal.emit(True)
             elif self.intent=='greet':
-                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,0))
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,0, random.choice(self.default_responses["Greet"])))
                 response_thread.start()
                 response_thread.join()
+            elif self.intent=='reademail' and self.logged_in:
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,0, random.choice(self.default_responses["ReadEmail"])))
+                response_thread.start()
+                response_thread.join()
+                self.canvas_change_signal.emit(f"ReadEmail $ {text}")
+            elif self.intent == 'sendemail' and self.logged_in:
+                response_thread=threading.Thread(target=self.get_and_play_responses, args=(intent_label,text,0, random.choice(self.default_responses["SendEmail"])))
+                response_thread.start()
+                response_thread.join()
+                self.canvas_change_signal.emit(f"SendEmail $ {text}")
             else:
                 if self.logged_in:
                     print(self.intent , response)
@@ -677,19 +694,84 @@ class MainWindow(QMainWindow):
         self.threads.append(self.voice_thread)
     
     def update_canvas_main(self, text):
-        self.canvas_overlay.clear_components()
-        response, content, params=update_canvas(self.voice_thread.intent, text)
-        try:
-            importlib.reload(canvas_update)
-            if len(params)==1:
-                getattr(canvas_update, response)(self.canvas_overlay)
-            elif len(params)==2:
-                getattr(canvas_update, response)(self.canvas_overlay, text)
-        except Exception as e:
-            print(f"Error in updating canvas: {e}")
-            with open("canvas_update.py", "w") as f:
-                f.write("def add_components_to_canvas(canvas_overlay, text=None):\n    pass")
-            self.canvas_overlay.add_component(QLabel("Error in updating canvas!"))
+        self.voice_thread.processing=True
+        self.voice_thread.is_responding=True
+        text=text.split("$")
+        if len(text)==2:
+            result=text[1]
+        text=text[0].strip()
+        print(text)
+        # audio_array = self.voice_thread.audio_buffer
+        # audio_array = np.array(audio_array)
+        # # Normalize and save audio as WAV file
+        # audio_array = np.int16(audio_array / np.max(np.abs(audio_array)) * 32767)
+        # file_name = f"recordings/voice_clip_{int(time.time())}.wav"
+        # audio_array_reduced = nr.reduce_noise(y=audio_array, sr=44100)
+        # sf.write(file_name, audio_array_reduced, samplerate=44100)
+        if text=="ReadEmail":
+            # self.canvas_overlay.clear_components()
+            break_flag=False
+            while not break_flag:
+                if os.environ['EMAIL_USERNAME']=="None":
+                    all_emails=backend_services.all_emails()
+                    rep = presupported_canvas_functions.display_credentials(self.canvas_overlay, all_emails, [self.canvas_overlay.geometry().width(), self.canvas_overlay.geometry().height()])
+                    if not rep:
+                        r = self.voice_thread.get_and_play_responses("error", "error", 1, "No emails found! Please add a new one using the on-screen menu.")
+                        # self.canvas_overlay.clear_components()
+                        inner_rep = presupported_canvas_functions.add_new_credential(self.canvas_overlay, all_emails, backend_services.add_email_credentials)
+                    else:
+                        # self.canvas_overlay.clear_components()
+                        r = self.voice_thread.get_and_play_responses("error", "error", 1, "Which account would you like to read from?")
+                        inner_rep = presupported_canvas_functions.choose_email_id(self.canvas_overlay, all_emails)
+                        os.environ['EMAIL_USERNAME']=inner_rep
+                        break_flag=True
+            username = os.environ['EMAIL_USERNAME']
+            credentials = backend_services.get_email_credentials(username)
+            emails_to_read = backend_services.fetch_gmail_emails(username, credentials)
+            # self.canvas_overlay.clear_components()
+            presupported_canvas_functions.display_emails(self.canvas_overlay, emails_to_read, [self.canvas_overlay.geometry().width(), self.canvas_overlay.geometry().height()])
+        elif text=="SendEmail":
+            self.canvas_overlay.clear_components()
+            break_flag=False
+            while not break_flag:
+                if not os.environ['EMAIL_USERNAME']=="None":
+                    all_emails=backend_services.all_emails()
+                    rep = presupported_canvas_functions.display_credentials(self.canvas_overlay, all_emails, [self.canvas_overlay.geometry().width(), self.canvas_overlay.geometry().height()])
+                    if not rep:
+                        r = self.voice_thread.get_and_play_responses("error", "error", 1, "No emails found! Please add a new one using the on-screen menu.")
+                        self.canvas_overlay.clear_components()
+                        inner_rep = presupported_canvas_functions.add_new_credential(self.canvas_overlay, all_emails, backend_services.add_email)
+                    else:
+                        r = self.voice_thread.get_and_play_responses("error", "error", 1, "Which account would you like to send from?")
+                        # self.canvas_overlay.clear_components()
+                        inner_rep = presupported_canvas_functions.choose_email_id(self.canvas_overlay, all_emails)
+                        os.environ['EMAIL_USERNAME']=inner_rep
+                        break_flag=True
+            username = os.environ['EMAIL_USERNAME']
+            credentials = backend_services.get_email_credentials(username)
+            # self.canvas_overlay.clear_components()
+            # result = AudioTranscriber().transcribe_audio(file_name)
+            gemini_email = gemini_calls.general_response(f"Draft Email for the following user request: {result}. \n Return a dictionary with the following keys: 'to', 'subject', 'body'.")
+            if backend_services.send_email(username, credentials, gemini_email['to'], gemini_email['subject'], gemini_email['body']):
+                self.voice_thread.get_and_play_responses("success", "success", 0, "Email sent successfully!")
+            self.voice_thread.processing=False
+        else:
+            # self.canvas_overlay.clear_components()
+            response, codeee, params=generate_function(self.voice_thread.intent, text)
+            print(response, params, codeee)
+            try:
+                importlib.reload(canvas_update)
+                if len(params)==1:
+                    getattr(canvas_update, response)(self.canvas_overlay)
+                elif len(params)==2:
+                    getattr(canvas_update, response)(self.canvas_overlay, text)
+            except Exception as e:
+                print(f"Error in updating canvas: {e}")
+                with open("canvas_update.py", "w") as f:
+                    f.write("def add_components_to_canvas(canvas_overlay, text=None):\n    pass")
+                self.canvas_overlay.add_component(QLabel("Error in updating canvas!"))
+        self.voice_thread.processing=False
+        self.voice_thread.is_responding=False
         
     def resizeEvent(self, event):
         """Ensure the canvas overlay matches the OpenGL widget size on resize."""

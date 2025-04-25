@@ -9,13 +9,13 @@ class AudioTranscriber:
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
         logging.basicConfig(filename=f"{self.log_dir}/audio_transcribe.log", level=logging.INFO, format="[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s")
-        self.client = Client("hf-audio/whisper-large-v3")
+        self.client = Client("abidlabs/whisper")
 
     def transcribe_audio(self, file_path):
         try:
             result = self.client.predict(
-                inputs=handle_file(file_path),
-                task="transcribe",
+                audio=handle_file(file_path),
+                # task="transcribe",
                 api_name="/predict"
             )
             self.logger.info(f"Transcription result: {result}")
